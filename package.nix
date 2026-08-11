@@ -171,10 +171,28 @@ stdenv.mkDerivation (finalAttrs: {
     # which .desktop id to hand xdg-settings when the app registers sand://.
     # Unset, it guesses "electron.desktop" and the registration points at
     # nothing, so sand:// links never reach the app.
+    # --no-sandbox: upstream's custom Electron build crash-loops every
+    # `sandbox: true` renderer -- the <webview> that shows the agent's box
+    # screen -- with FATAL:platform_shared_memory_region_posix.cc. Traced with
+    # strace: the renderer is forked from the sandboxed zygote (chroot'd into
+    # a dead /proc/<tid>/fdinfo, hence the odd ESRCH) and then tries to create
+    # /dev/shm shared memory directly. Stock Chromium brokers that through the
+    # browser process; their build never installs the broker hooks for webview
+    # renderers, so the crash reproduces on stock Ubuntu with the .deb too
+    # (same signature as electron#30758, open-webui/desktop#157). A stock
+    # nixpkgs electron_42 runs the identical sandboxed renderer fine, so this
+    # is upstream's bug, not this package's.
+    #
+    # The flag costs nothing that works today: upstream already launches the
+    # main renderer with --no-sandbox --no-zygote, the GPU process with
+    # --no-sandbox, and every utility with --service-sandbox-type=none. The
+    # webview was the only sandboxed process, and it only ever crashed.
+    # Remove the flag when upstream fixes their sandboxed-renderer shm path.
     makeShellWrapper "$out/share/grok-bot/sand" "$out/bin/grok-bot" \
       "''${gappsWrapperArgs[@]}" \
       --suffix PATH : ${lib.makeBinPath [ xdg-utils ]} \
       --set-default CHROME_DESKTOP grok-bot.desktop \
+      --add-flags "--no-sandbox" \
       --add-flags "\''${NIXOS_OZONE_WL:+\''${WAYLAND_DISPLAY:+--ozone-platform-hint=auto --enable-features=WaylandWindowDecorations}}"
 
     # Upstream calls the binary "sand" and registers the sand:// URL scheme.
