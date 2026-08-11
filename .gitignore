@@ -1,0 +1,5 @@
+result
+result-*
+
+# Electron/Chromium crash dumps, if the app is ever run from this directory
+core.*
