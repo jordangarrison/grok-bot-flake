@@ -37,6 +37,30 @@ The overlay uses your own nixpkgs, so it needs `allowUnfree` set for
 The package installs `grok-bot` plus a `sand` alias — upstream names the binary
 `sand` and registers the `sand://` URL scheme, which the login redirect uses.
 
+## sand:// links need the package installed, not `nix run`
+
+`nix run` puts the binary in the store but installs no desktop entry, so
+nothing on `XDG_DATA_DIRS` provides `grok-bot.desktop` and the desktop
+environment cannot resolve `sand://` to this app — even when
+`~/.config/mimeapps.list` already names it. Check with:
+
+```sh
+xdg-mime query default x-scheme-handler/sand
+```
+
+Empty output means the handler is unresolved. Install the package into a
+profile (`home.packages`, `environment.systemPackages`, or
+`nix profile install`) so `share/applications/grok-bot.desktop` lands on
+`XDG_DATA_DIRS`, then re-run the query — it should print `grok-bot.desktop`.
+
+The desktop *id* stays `grok-bot.desktop` across rebuilds even though the
+`Exec=` store path changes, so the association survives upgrades.
+
+The wrapper also sets `CHROME_DESKTOP=grok-bot.desktop`. Electron's
+`setAsDefaultProtocolClient()` reads that variable to decide which desktop id
+to hand `xdg-settings`; unset, it guesses `electron.desktop` and registers a
+handler that points at nothing.
+
 ## How it is built
 
 Upstream ships its own Electron 42 build, and the bundled native modules

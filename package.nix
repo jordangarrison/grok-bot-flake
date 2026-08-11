@@ -4,7 +4,7 @@
   fetchurl,
   dpkg,
   autoPatchelfHook,
-  makeWrapper,
+  makeShellWrapper,
   wrapGAppsHook3,
 
   alsa-lib,
@@ -84,7 +84,7 @@ stdenv.mkDerivation (finalAttrs: {
   nativeBuildInputs = [
     dpkg
     autoPatchelfHook
-    makeWrapper
+    makeShellWrapper
     wrapGAppsHook3
   ];
 
@@ -161,9 +161,20 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   preFixup = ''
-    makeWrapper "$out/share/grok-bot/sand" "$out/bin/grok-bot" \
+    # makeShellWrapper, not makeWrapper: wrapGAppsHook3 pulls in
+    # makeBinaryWrapper, whose wrappers pass argv through literally. The
+    # conditional ozone flags below need real shell parameter expansion, and a
+    # binary wrapper would hand the app an unexpanded "''${NIXOS_OZONE_WL:+..."
+    # string as a positional argument -- which Electron reads as a deep link.
+    #
+    # CHROME_DESKTOP is how Electron's setAsDefaultProtocolClient() decides
+    # which .desktop id to hand xdg-settings when the app registers sand://.
+    # Unset, it guesses "electron.desktop" and the registration points at
+    # nothing, so sand:// links never reach the app.
+    makeShellWrapper "$out/share/grok-bot/sand" "$out/bin/grok-bot" \
       "''${gappsWrapperArgs[@]}" \
       --suffix PATH : ${lib.makeBinPath [ xdg-utils ]} \
+      --set-default CHROME_DESKTOP grok-bot.desktop \
       --add-flags "\''${NIXOS_OZONE_WL:+\''${WAYLAND_DISPLAY:+--ozone-platform-hint=auto --enable-features=WaylandWindowDecorations}}"
 
     # Upstream calls the binary "sand" and registers the sand:// URL scheme.
