@@ -1,0 +1,100 @@
+name: Update Grok Bot Flake
+
+on:
+  schedule:
+    # Run daily at 03:17 UTC, away from GitHub's busiest hour boundary.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: update-grok-bot-flake
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Update Grok Bot package
+        run: ./update.sh
+
+      - name: Update flake inputs
+        run: nix flake update
+
+      - name: Evaluate flake
+        run: nix flake check --no-build --show-trace
+
+      - name: Build package to verify
+        run: nix build .#packages.x86_64-linux.default --print-build-logs
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No changes detected"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "Changes detected:"
+            git --no-pager diff --stat
+          fi
+
+      - name: Commit and push changes
+        if: steps.changes.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- package.nix; then
+            message="chore: update flake inputs"
+          else
+            version=$(sed -n 's/^  version = "\(.*\)";$/\1/p' package.nix)
+            message="chore: update grok-bot to $version"
+          fi
+
+          git add package.nix flake.lock
+          git commit -m "$message"
+
+          # A developer may have pushed while the package was building. Rebase
+          # without force-pushing, revalidate the combined tree, and retry a
+          # narrow race between fetch and push up to three times.
+          for attempt in 1 2 3; do
+            git fetch origin main
+            if ! git merge-base --is-ancestor origin/main HEAD; then
+              git rebase origin/main
+              nix flake check --no-build --show-trace
+              nix build .#packages.x86_64-linux.default --print-build-logs
+            fi
+
+            # The helper's child shell, not this shell, expands GH_TOKEN.
+            # shellcheck disable=SC2016
+            if git \
+              -c credential.helper= \
+              -c 'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' \
+              push "https://github.com/${GITHUB_REPOSITORY}.git" HEAD:main; then
+              exit 0
+            fi
+            echo "Push attempt $attempt failed; retrying after another fetch" >&2
+          done
+
+          echo "Unable to push the update after three attempts" >&2
+          exit 1

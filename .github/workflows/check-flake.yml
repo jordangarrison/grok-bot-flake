@@ -1,0 +1,29 @@
+name: Check flake
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (x86_64-linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+
+      - name: Evaluate flake
+        run: nix flake check --no-build --show-trace
+
+      - name: Build package
+        run: nix build .#packages.x86_64-linux.default --print-build-logs

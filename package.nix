@@ -52,9 +52,11 @@
 }:
 
 let
-  # The download URL embeds an upstream build id alongside the version.
-  # Both come from the "stable" channel manifest -- see ./update.sh.
-  buildId = "076e9d4bf42abbfa576702aea18ddbc49d9d3ab5";
+  # The download URL embeds an upstream product namespace and build id
+  # alongside the version. All three come from the stable channel manifest --
+  # see ./update.sh.
+  downloadBase = "https://downloads.cursor.com/grokbot/stable";
+  buildId = "ca2c2b6f79b6130a4822d8189711b0f79f9d4661";
 
   # Shared libraries the bundled Chromium dlopen()s at runtime rather than
   # linking against, so autoPatchelfHook cannot discover them on its own.
@@ -74,11 +76,11 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "grok-bot";
-  version = "0.16.0";
+  version = "0.20.0";
 
   src = fetchurl {
-    url = "https://downloads.cursor.com/sand/stable/${buildId}/linux/x64/Grok_Bot_${finalAttrs.version}.deb";
-    hash = "sha256-mdizlmQZQbpLiJp5HpMGc3s5jAw5NPY6lUVDCRAZK8w=";
+    url = "${downloadBase}/${buildId}/linux/x64/Grok_Bot_${finalAttrs.version}.deb";
+    hash = "sha256-Z6brYWSrIzpcXU1QZl762iy6rp8i763oXpNKZf37sg0=";
   };
 
   nativeBuildInputs = [
@@ -148,14 +150,29 @@ stdenv.mkDerivation (finalAttrs: {
     # Chromium falls back to the user-namespace sandbox, which NixOS enables.
     rm -f "$out/share/grok-bot/chrome-sandbox"
 
-    install -Dm644 usr/share/icons/hicolor/1024x1024/apps/sand.png \
+    # Upstream renamed the Debian package, binary, desktop file, and icon from
+    # `sand` to `grok-bot` in 0.19.0. Accept either layout so routine updates
+    # across that transition (and old pinned builds) keep working.
+    if [ -f usr/share/icons/hicolor/1024x1024/apps/grok-bot.png ]; then
+      icon=usr/share/icons/hicolor/1024x1024/apps/grok-bot.png
+    else
+      icon=usr/share/icons/hicolor/1024x1024/apps/sand.png
+    fi
+    install -Dm644 "$icon" \
       "$out/share/icons/hicolor/1024x1024/apps/grok-bot.png"
 
-    install -Dm644 usr/share/applications/sand.desktop \
-      "$out/share/applications/grok-bot.desktop"
+    if [ -f usr/share/applications/grok-bot.desktop ]; then
+      desktop=usr/share/applications/grok-bot.desktop
+      desktopExec='"/opt/Grok Bot/grok-bot"'
+    else
+      desktop=usr/share/applications/sand.desktop
+      desktopExec='"/opt/Grok Bot/sand"'
+    fi
+    install -Dm644 "$desktop" "$out/share/applications/grok-bot.desktop"
     substituteInPlace "$out/share/applications/grok-bot.desktop" \
-      --replace-fail '"/opt/Grok Bot/sand"' "$out/bin/grok-bot" \
-      --replace-fail 'Icon=sand' 'Icon=grok-bot'
+      --replace-fail "$desktopExec" "$out/bin/grok-bot"
+    sed -i 's/^Icon=.*/Icon=grok-bot/' \
+      "$out/share/applications/grok-bot.desktop"
 
     runHook postInstall
   '';
@@ -188,14 +205,20 @@ stdenv.mkDerivation (finalAttrs: {
     # --no-sandbox, and every utility with --service-sandbox-type=none. The
     # webview was the only sandboxed process, and it only ever crashed.
     # Remove the flag when upstream fixes their sandboxed-renderer shm path.
-    makeShellWrapper "$out/share/grok-bot/sand" "$out/bin/grok-bot" \
+    if [ -x "$out/share/grok-bot/grok-bot" ]; then
+      upstreamExecutable="$out/share/grok-bot/grok-bot"
+    else
+      upstreamExecutable="$out/share/grok-bot/sand"
+    fi
+
+    makeShellWrapper "$upstreamExecutable" "$out/bin/grok-bot" \
       "''${gappsWrapperArgs[@]}" \
       --suffix PATH : ${lib.makeBinPath [ xdg-utils ]} \
       --set-default CHROME_DESKTOP grok-bot.desktop \
       --add-flags "--no-sandbox" \
       --add-flags "\''${NIXOS_OZONE_WL:+\''${WAYLAND_DISPLAY:+--ozone-platform-hint=auto --enable-features=WaylandWindowDecorations}}"
 
-    # Upstream calls the binary "sand" and registers the sand:// URL scheme.
+    # Keep the historical binary name used by older releases and sand:// URLs.
     ln -s "$out/bin/grok-bot" "$out/bin/sand"
   '';
 
