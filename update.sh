@@ -1,5 +1,4 @@
-#!/usr/bin/env nix-shell
-#!nix-shell -i bash -p bash curl jq coreutils gnused nix dpkg
+#!/usr/bin/env bash
 #
 # Bump package.nix to the current stable Grok Bot release.
 #
@@ -14,6 +13,20 @@
 set -euo pipefail
 
 cd "$(dirname "$(readlink -f "$0")")"
+
+# Run with tools from this flake's locked nixpkgs input. Unlike a nix-shell
+# shebang, this does not require CI or users to configure a NIX_PATH/channel.
+if [[ "${GROK_BOT_UPDATE_ENV:-}" != 1 ]]; then
+  exec nix shell --inputs-from . \
+    nixpkgs#bash \
+    nixpkgs#curl \
+    nixpkgs#jq \
+    nixpkgs#coreutils \
+    nixpkgs#gnused \
+    nixpkgs#nix \
+    nixpkgs#dpkg \
+    --command env GROK_BOT_UPDATE_ENV=1 bash ./update.sh "$@"
+fi
 
 FEED_PLATFORM="darwin-arm64"
 # Keep a stable updater identity so staged-rollout bucketing is deterministic
