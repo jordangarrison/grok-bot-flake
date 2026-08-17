@@ -79,8 +79,9 @@ nix profile install github:jordangarrison/grok-bot-flake
 
 - `grok-bot` — the app, wrapped for NixOS (patchelf'd, GApps-wrapped,
   Wayland-aware).
-- `sand` — an alias for the same binary. Upstream names the executable `sand`
-  and registers the `sand://` URL scheme, which the login flow uses.
+- `sand` — a compatibility alias for the same binary. Older upstream releases
+  used that executable name, and the app still registers the `sand://` URL
+  scheme used by existing login flows.
 - `share/applications/grok-bot.desktop` + icon, so launchers and URL-scheme
   routing can find the app.
 
@@ -160,25 +161,35 @@ Differences from the `.deb`:
 ./update.sh
 ```
 
-Reads the current stable version from upstream's update feed and rewrites
-`version`, `buildId`, and `hash` in `package.nix`.
+Reads the current stable version from upstream's update feed and rewrites the
+download namespace, `version`, `buildId`, and `hash` in `package.nix`. It also
+checks that the downloaded artifact is the expected `sand`/`grok-bot` amd64
+package and that its embedded version matches the feed before changing
+anything.
 
 One wrinkle: upstream's Linux update feed is empty — `linux-x64` answers HTTP
 204 for every version, and the in-app updater has no Linux branch at all (it
-falls through to `darwin-arm64`). The build id in the download URL is shared
-across platforms, so the script reads the darwin-arm64 feed and rebuilds the
-Linux `.deb` URL from it. This also means **in-app self-update does not work
-on Linux** — re-run `./update.sh` and rebuild instead.
+falls through to `darwin-arm64`). The download namespace and build id are
+shared across platforms, so the script reads them from the darwin-arm64 feed,
+rebuilds the conventional Linux `.deb` URL, downloads it, and validates its
+metadata. If upstream changes that Linux URL convention, the update fails
+safely instead of committing an unverified package. This also means **in-app
+self-update does not work on Linux** — re-run `./update.sh` and rebuild instead.
+
+A daily GitHub Actions workflow runs the updater, refreshes `flake.lock`, builds
+the package, and commits verified changes to `main`. The workflow can also be
+run manually from the Actions tab.
 
 To pin an exact build, pass its URL:
 
 ```sh
-./update.sh https://downloads.cursor.com/sand/stable/<buildId>/linux/x64/Grok_Bot_<version>.deb
+./update.sh https://downloads.cursor.com/<product>/stable/<buildId>/linux/x64/Grok_Bot_<version>.deb
 ```
 
 ## Provenance
 
-The `.deb` is served from `downloads.cursor.com`, its control file lists
-`SpaceXAI <hi@cursor.com>` as vendor with `Homepage: https://cursor.com`, and
-the package name is `sand`. The app is built on Cursor's release
-infrastructure. That is expected, not a mis-download.
+The `.deb` is served from `downloads.cursor.com`, and its control file lists
+`SpaceXAI <hi@cursor.com>` as vendor with `Homepage: https://cursor.com`.
+Upstream renamed the Debian package from `sand` to `grok-bot` in 0.19.0 while
+retaining `sand` as a provided compatibility name. The app is built on Cursor's
+release infrastructure. That is expected, not a mis-download.
