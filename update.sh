@@ -35,15 +35,18 @@ FEED_PLATFORMS=(linux-x64 linux-arm64)
 
 parse_download_location() {
   local url="$1"
+  local parsed_download_base parsed_build_id
 
-  download_base="$(sed -En 's|^(https://downloads\.cursor\.com/[^/]+/stable)/[^/]+/.*$|\1|p' <<<"$url")"
-  build_id="$(sed -En 's|^https://downloads\.cursor\.com/[^/]+/stable/([^/]+)/.*$|\1|p' <<<"$url")"
+  parsed_download_base="$(sed -En 's|^(https://downloads\.cursor\.com/[^/]+/stable)/[^/]+/.*$|\1|p' <<<"$url")"
+  parsed_build_id="$(sed -En 's|^https://downloads\.cursor\.com/[^/]+/stable/([^/]+)/.*$|\1|p' <<<"$url")"
 
-  if [[ ! "$download_base" =~ ^https://downloads\.cursor\.com/[a-z0-9-]+/stable$ ]] \
-    || [[ ! "$build_id" =~ ^[0-9a-f]{40}$ ]]; then
-    echo "error: could not parse a valid download namespace and build id out of: $url" >&2
-    exit 1
+  if [[ ! "$parsed_download_base" =~ ^https://downloads\.cursor\.com/[a-z0-9-]+/stable$ ]] \
+    || [[ ! "$parsed_build_id" =~ ^[0-9a-f]{40}$ ]]; then
+    return 1
   fi
+
+  download_base="$parsed_download_base"
+  build_id="$parsed_build_id"
 }
 
 parse_version_from_deb_url() {
@@ -108,8 +111,13 @@ case $# in
   0)
     response=""
     for platform in "${FEED_PLATFORMS[@]}"; do
-      if response="$(fetch_feed "$platform")"; then
-        break
+      if candidate_response="$(fetch_feed "$platform")"; then
+        candidate_artifact_url="$(jq -er '.url' <<<"$candidate_response")"
+        if parse_download_location "$candidate_artifact_url"; then
+          response="$candidate_response"
+          break
+        fi
+        echo "warning: $platform feed returned an unsupported artifact URL: $candidate_artifact_url" >&2
       fi
     done
     if [ -z "$response" ]; then
@@ -117,14 +125,15 @@ case $# in
       exit 1
     fi
     version="$(jq -er '.version // .name' <<<"$response")"
-    feed_artifact_url="$(jq -er '.url' <<<"$response")"
-    parse_download_location "$feed_artifact_url"
     resolve_linux_deb
     ;;
   1)
     deb_url="$1"
     parse_version_from_deb_url "$deb_url"
-    parse_download_location "$deb_url"
+    if ! parse_download_location "$deb_url"; then
+      echo "error: could not parse a valid download namespace and build id out of: $deb_url" >&2
+      exit 1
+    fi
     if [ -z "$version" ]; then
       echo "error: could not parse version out of: $deb_url" >&2
       exit 1
