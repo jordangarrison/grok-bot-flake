@@ -22,6 +22,15 @@ jobs:
       - name: Install Nix
         uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
 
+      - name: Test updater feed fallback
+        run: |
+          nix shell --inputs-from . \
+            nixpkgs#bash \
+            nixpkgs#jq \
+            nixpkgs#coreutils \
+            nixpkgs#gnused \
+            --command ./tests/update-feed-fallback.sh
+
       - name: Evaluate flake
         run: nix flake check --no-build --show-trace
 
