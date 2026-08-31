@@ -56,7 +56,7 @@ let
   # alongside the version. All three come from the stable channel manifest --
   # see ./update.sh.
   downloadBase = "https://downloads.cursor.com/grokbot/stable";
-  buildId = "62e6d780d1801f60e35f761c55b494b56b0ff01f";
+  buildId = "2385d097738b3719cc5ecd9281a107aa106215f1";
 
   # Shared libraries the bundled Chromium dlopen()s at runtime rather than
   # linking against, so autoPatchelfHook cannot discover them on its own.
@@ -76,11 +76,14 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "grok-bot";
-  version = "0.27.0";
+  version = "0.30.0";
+  # Upstream has used both Grok_Bot_<version>.deb and
+  # grok-bot_<version>_amd64.deb; ./update.sh writes whichever the CDN serves.
+  debFile = "grok-bot_${finalAttrs.version}_amd64.deb";
 
   src = fetchurl {
-    url = "${downloadBase}/${buildId}/linux/x64/Grok_Bot_${finalAttrs.version}.deb";
-    hash = "sha256-lJRLJUfjdLdNt2K/Lsyxkoz6c0vxuTRdsyfdlmrjFNg=";
+    url = "${downloadBase}/${buildId}/linux/x64/${finalAttrs.debFile}";
+    hash = "sha256-+4iLIgTIpRxxqfX5opE6wQVh8+9pOcEkXsrk6DfUraI=";
   };
 
   nativeBuildInputs = [
@@ -151,15 +154,24 @@ stdenv.mkDerivation (finalAttrs: {
     rm -f "$out/share/grok-bot/chrome-sandbox"
 
     # Upstream renamed the Debian package, binary, desktop file, and icon from
-    # `sand` to `grok-bot` in 0.19.0. Accept either layout so routine updates
-    # across that transition (and old pinned builds) keep working.
-    if [ -f usr/share/icons/hicolor/1024x1024/apps/grok-bot.png ]; then
-      icon=usr/share/icons/hicolor/1024x1024/apps/grok-bot.png
-    else
-      icon=usr/share/icons/hicolor/1024x1024/apps/sand.png
+    # `sand` to `grok-bot` in 0.19.0, then dropped the 1024x1024 hicolor icon
+    # in 0.29.0. Preserve every supplied icon size under the stable name rather
+    # than assuming any particular size is present.
+    foundIcon=""
+    for extension in png svg; do
+      for icon in usr/share/icons/hicolor/*/apps/{sand,grok-bot}."$extension"; do
+        [ -f "$icon" ] || continue
+        relativeIcon="''${icon#usr/share/icons/hicolor/}"
+        iconSize="''${relativeIcon%%/*}"
+        install -Dm644 "$icon" \
+          "$out/share/icons/hicolor/$iconSize/apps/grok-bot.$extension"
+        foundIcon=1
+      done
+    done
+    if [ -z "$foundIcon" ]; then
+      echo "error: no grok-bot/sand hicolor icon found in the .deb" >&2
+      exit 1
     fi
-    install -Dm644 "$icon" \
-      "$out/share/icons/hicolor/1024x1024/apps/grok-bot.png"
 
     if [ -f usr/share/applications/grok-bot.desktop ]; then
       desktop=usr/share/applications/grok-bot.desktop

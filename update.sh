@@ -2,13 +2,13 @@
 #
 # Bump package.nix to the current stable Grok Bot release.
 #
-# Upstream's Linux update feed is empty (`linux-x64` answers 204 for every
-# version), but the download namespace and build id are shared across
-# platforms. Read those values from the darwin-arm64 feed, then rebuild and
-# validate the Linux .deb URL.
+# The Linux update feed advertises an AppImage zsync URL, not the .deb, but
+# the download namespace and build id are shared across Linux artifacts. Read
+# those values from linux-x64 (falling back to linux-arm64), rebuild the .deb
+# URL, and probe the filenames upstream has used.
 #
 # Pass a .deb URL to pin an exact build instead:
-#   ./update.sh https://downloads.cursor.com/grokbot/stable/<buildId>/linux/x64/Grok_Bot_<version>.deb
+#   ./update.sh https://downloads.cursor.com/grokbot/stable/<buildId>/linux/x64/grok-bot_<version>_amd64.deb
 
 set -euo pipefail
 
@@ -28,11 +28,10 @@ if [[ "${GROK_BOT_UPDATE_ENV:-}" != 1 ]]; then
     --command env GROK_BOT_UPDATE_ENV=1 bash ./update.sh "$@"
 fi
 
-FEED_PLATFORM="darwin-arm64"
 # Keep a stable updater identity so staged-rollout bucketing is deterministic
 # across ephemeral CI runners.
 FEED_CLIENT_ID="07d67027-2556-4c0e-9fd9-e0bde18922ca"
-FEED_URL="https://api2.cursor.sh/updates/api/update/${FEED_PLATFORM}/sand/0.0.1/${FEED_CLIENT_ID}/stable"
+FEED_PLATFORMS=(linux-x64 linux-arm64)
 
 parse_download_location() {
   local url="$1"
@@ -47,18 +46,84 @@ parse_download_location() {
   fi
 }
 
+parse_version_from_deb_url() {
+  local url="$1"
+  version="$(sed -En 's|.*/Grok_Bot_([^/]+)\.deb$|\1|p' <<<"$url")"
+  if [ -z "$version" ]; then
+    version="$(sed -En 's|.*/grok-bot_([^/]+)_amd64\.deb$|\1|p' <<<"$url")"
+  fi
+}
+
+deb_file_nix_from_url() {
+  local filename="${1##*/}"
+
+  case "$filename" in
+    "Grok_Bot_${version}.deb") printf '%s\n' "Grok_Bot_\${finalAttrs.version}.deb" ;;
+    "grok-bot_${version}_amd64.deb") printf '%s\n' "grok-bot_\${finalAttrs.version}_amd64.deb" ;;
+    *) return 1 ;;
+  esac
+}
+
+prefetch_deb() {
+  local url="$1"
+  echo "prefetching $url" >&2
+  nix store prefetch-file --json --hash-type sha256 "$url"
+}
+
+resolve_linux_deb() {
+  local candidates=(
+    "${download_base}/${build_id}/linux/x64/grok-bot_${version}_amd64.deb"
+    "${download_base}/${build_id}/linux/x64/Grok_Bot_${version}.deb"
+  )
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if prefetch="$(prefetch_deb "$candidate")"; then
+      deb_url="$candidate"
+      return 0
+    fi
+  done
+
+  echo "error: no Linux amd64 .deb found for $version ($build_id)" >&2
+  printf 'tried:\n' >&2
+  printf '  %s\n' "${candidates[@]}" >&2
+  exit 1
+}
+
+fetch_feed() {
+  local platform="$1"
+  local url="https://api2.cursor.sh/updates/api/update/${platform}/sand/0.0.1/${FEED_CLIENT_ID}/stable"
+  local response
+
+  echo "checking $url" >&2
+  if response="$(curl --retry 3 --retry-all-errors -fsSL "$url")" \
+    && jq -e '(.version // .name | type == "string" and length > 0)
+      and (.url | type == "string" and length > 0)' <<<"$response" >/dev/null; then
+    printf '%s\n' "$response"
+    return 0
+  fi
+  return 1
+}
+
 case $# in
   0)
-    echo "checking $FEED_URL" >&2
-    response="$(curl --retry 3 --retry-all-errors -fsSL "$FEED_URL")"
-    version="$(jq -er '.name // .version' <<<"$response")"
+    response=""
+    for platform in "${FEED_PLATFORMS[@]}"; do
+      if response="$(fetch_feed "$platform")"; then
+        break
+      fi
+    done
+    if [ -z "$response" ]; then
+      echo "error: no Linux update feed returned a usable response" >&2
+      exit 1
+    fi
+    version="$(jq -er '.version // .name' <<<"$response")"
     feed_artifact_url="$(jq -er '.url' <<<"$response")"
     parse_download_location "$feed_artifact_url"
-    deb_url="${download_base}/${build_id}/linux/x64/Grok_Bot_${version}.deb"
+    resolve_linux_deb
     ;;
   1)
     deb_url="$1"
-    version="$(sed -En 's|.*/Grok_Bot_([^/]+)\.deb$|\1|p' <<<"$deb_url")"
+    parse_version_from_deb_url "$deb_url"
     parse_download_location "$deb_url"
     if [ -z "$version" ]; then
       echo "error: could not parse version out of: $deb_url" >&2
@@ -66,7 +131,7 @@ case $# in
     fi
     ;;
   *)
-    echo "usage: $0 [Grok_Bot_<version>.deb URL]" >&2
+    echo "usage: $0 [linux amd64 .deb URL]" >&2
     exit 2
     ;;
 esac
@@ -76,19 +141,27 @@ if [[ ! "$version" =~ ^[0-9][0-9A-Za-z._+~-]*$ ]]; then
   exit 1
 fi
 
+if ! deb_file_nix="$(deb_file_nix_from_url "$deb_url")"; then
+  echo "error: unsupported Linux .deb filename in: $deb_url" >&2
+  exit 1
+fi
+
 current_download_base="$(sed -n 's/^  downloadBase = "\(.*\)";$/\1/p' package.nix)"
 current_version="$(sed -n 's/^  version = "\(.*\)";$/\1/p' package.nix)"
 current_build_id="$(sed -n 's/^  buildId = "\(.*\)";$/\1/p' package.nix)"
+current_deb_file="$(sed -n 's/^  debFile = "\(.*\)";$/\1/p' package.nix)"
 current_hash="$(sed -n 's/^    hash = "\(.*\)";$/\1/p' package.nix)"
 
 if [ -z "$current_download_base" ] || [ -z "$current_version" ] \
-  || [ -z "$current_build_id" ] || [ -z "$current_hash" ]; then
+  || [ -z "$current_build_id" ] || [ -z "$current_deb_file" ] \
+  || [ -z "$current_hash" ]; then
   echo "error: could not read the current release metadata from package.nix" >&2
   exit 1
 fi
 
-echo "prefetching $deb_url" >&2
-prefetch="$(nix store prefetch-file --json --hash-type sha256 "$deb_url")"
+if [ -z "${prefetch:-}" ]; then
+  prefetch="$(prefetch_deb "$deb_url")"
+fi
 hash="$(jq -er '.hash' <<<"$prefetch")"
 deb_path="$(jq -er '.storePath' <<<"$prefetch")"
 
@@ -115,6 +188,7 @@ fi
 if [ "$download_base" = "$current_download_base" ] \
   && [ "$version" = "$current_version" ] \
   && [ "$build_id" = "$current_build_id" ] \
+  && [ "$deb_file_nix" = "$current_deb_file" ] \
   && [ "$hash" = "$current_hash" ]; then
   echo "already at $version ($build_id)"
   exit 0
@@ -126,17 +200,20 @@ sed -i \
   -e "s|^  downloadBase = \".*\";$|  downloadBase = \"${download_base}\";|" \
   -e "s|^  buildId = \".*\";$|  buildId = \"${build_id}\";|" \
   -e "s|^  version = \".*\";$|  version = \"${version}\";|" \
+  -e "s|^  debFile = \".*\";$|  debFile = \"${deb_file_nix}\";|" \
   -e "s|^    hash = \".*\";$|    hash = \"${hash}\";|" \
   package.nix
 
 updated_download_base="$(sed -n 's/^  downloadBase = "\(.*\)";$/\1/p' package.nix)"
 updated_version="$(sed -n 's/^  version = "\(.*\)";$/\1/p' package.nix)"
 updated_build_id="$(sed -n 's/^  buildId = "\(.*\)";$/\1/p' package.nix)"
+updated_deb_file="$(sed -n 's/^  debFile = "\(.*\)";$/\1/p' package.nix)"
 updated_hash="$(sed -n 's/^    hash = "\(.*\)";$/\1/p' package.nix)"
 
 if [ "$updated_download_base" != "$download_base" ] \
   || [ "$updated_version" != "$version" ] \
   || [ "$updated_build_id" != "$build_id" ] \
+  || [ "$updated_deb_file" != "$deb_file_nix" ] \
   || [ "$updated_hash" != "$hash" ]; then
   echo "error: failed to write all release metadata to package.nix" >&2
   exit 1
