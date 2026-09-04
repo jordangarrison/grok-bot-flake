@@ -56,7 +56,7 @@ let
   # alongside the version. All three come from the stable channel manifest --
   # see ./update.sh.
   downloadBase = "https://downloads.cursor.com/grokbot/stable";
-  buildId = "2385d097738b3719cc5ecd9281a107aa106215f1";
+  buildId = "d8bc9c753edddb313047c9c69b480b7f8f321087";
 
   # Shared libraries the bundled Chromium dlopen()s at runtime rather than
   # linking against, so autoPatchelfHook cannot discover them on its own.
@@ -76,14 +76,14 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "grok-bot";
-  version = "0.30.0";
+  version = "0.39.0";
   # Upstream has used both Grok_Bot_<version>.deb and
   # grok-bot_<version>_amd64.deb; ./update.sh writes whichever the CDN serves.
   debFile = "grok-bot_${finalAttrs.version}_amd64.deb";
 
   src = fetchurl {
     url = "${downloadBase}/${buildId}/linux/x64/${finalAttrs.debFile}";
-    hash = "sha256-+4iLIgTIpRxxqfX5opE6wQVh8+9pOcEkXsrk6DfUraI=";
+    hash = "sha256-rkmK2vcfn/FzSnhhY8WAf6UBZay1qhArto9D6tlt5P4=";
   };
 
   nativeBuildInputs = [
@@ -175,15 +175,21 @@ stdenv.mkDerivation (finalAttrs: {
 
     if [ -f usr/share/applications/grok-bot.desktop ]; then
       desktop=usr/share/applications/grok-bot.desktop
-      desktopExec='"/opt/Grok Bot/grok-bot"'
     else
       desktop=usr/share/applications/sand.desktop
-      desktopExec='"/opt/Grok Bot/sand"'
     fi
     install -Dm644 "$desktop" "$out/share/applications/grok-bot.desktop"
-    substituteInPlace "$out/share/applications/grok-bot.desktop" \
-      --replace-fail "$desktopExec" "$out/bin/grok-bot"
-    sed -i 's/^Icon=.*/Icon=grok-bot/' \
+
+    # Older releases used an absolute /opt path, while 0.35.0 and later use
+    # `Exec=grok-bot %U`. Always point launchers and URL handlers at the Nix
+    # wrapper rather than depending on either upstream spelling or PATH.
+    if ! grep -q '^Exec=' "$out/share/applications/grok-bot.desktop"; then
+      echo "error: upstream desktop file has no Exec entry" >&2
+      exit 1
+    fi
+    sed -i \
+      -e "s|^Exec=.*|Exec=$out/bin/grok-bot %U|" \
+      -e 's/^Icon=.*/Icon=grok-bot/' \
       "$out/share/applications/grok-bot.desktop"
 
     runHook postInstall
