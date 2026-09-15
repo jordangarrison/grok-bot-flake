@@ -56,7 +56,7 @@ let
   # alongside the version. All three come from the stable channel manifest --
   # see ./update.sh.
   downloadBase = "https://downloads.cursor.com/grokbot/stable";
-  buildId = "c1e7d7a46549956d25f53e9c0b9f59666e03aa3a";
+  buildId = "e872793eb9471205c1f37e91891fedd0b827e3c1";
 
   # Shared libraries the bundled Chromium dlopen()s at runtime rather than
   # linking against, so autoPatchelfHook cannot discover them on its own.
@@ -76,14 +76,14 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "grok-bot";
-  version = "0.47.0";
+  version = "0.51.0";
   # Upstream has used both Grok_Bot_<version>.deb and
   # grok-bot_<version>_amd64.deb; ./update.sh writes whichever the CDN serves.
   debFile = "grok-bot_${finalAttrs.version}_amd64.deb";
 
   src = fetchurl {
     url = "${downloadBase}/${buildId}/linux/x64/${finalAttrs.debFile}";
-    hash = "sha256-EcoPUaU1uXr1GjUq35wPns0uGwQwpprpRRtoinoGWAg=";
+    hash = "sha256-hXs8Klk2n1oWQ5Q/1Bobl/VF8Kyg9pWdJyp+YsTMWeA=";
   };
 
   nativeBuildInputs = [
