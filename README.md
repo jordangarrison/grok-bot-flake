@@ -1,8 +1,8 @@
 # grok-bot-flake
 
 Nix flake for [Grok Bot](https://x.ai/news/introducing-grok-bot), xAI's desktop
-agent, on Linux. It repackages the official amd64 `.deb` — there is no source
-build.
+agent, on x86_64 Linux and Apple silicon macOS. It repackages the official
+amd64 `.deb` or signed arm64 `.app` ZIP — there is no source build.
 
 > [!NOTE]
 > Grok Bot is proprietary (`meta.license = unfree`). This flake is not
@@ -18,7 +18,7 @@ nix run github:jordangarrison/grok-bot-flake
 
 This works, but `sand://` login-redirect links will not route back to the app
 until the package is properly installed — see
-[Getting sand:// links to work](#getting-sand-links-to-work).
+[Getting sand:// links to work](#getting-sand-links-to-work-linux).
 
 ## Add it to your Nix config
 
@@ -75,7 +75,34 @@ deliberately does not — it uses your nixpkgs config, so you need `allowUnfree`
 nix profile install github:jordangarrison/grok-bot-flake
 ```
 
+### macOS (nix-darwin / Home Manager)
+
+Use the Home Manager example above. To make Spotlight and Launch Services see
+an actual app bundle, enable Home Manager's app copies:
+
+```nix
+targets.darwin.linkApps.enable = false;
+targets.darwin.copyApps.enable = true;
+```
+
+Launch `~/Applications/Home Manager Apps/Grok Bot.app`, then sign in and grant
+only the permissions you need. The upstream bundle declares both `sand://`
+and `grokbot://`; macOS Launch Services handles these after registering the
+installed app. Linux `xdg-mime` commands below do **not** apply on macOS.
+If login redirects do not open the app, open the installed bundle once first.
+
+The bundle keeps Anysphere Incorporated's Developer ID signature
+(team `DCNK4UB866`) and stapled notarization ticket. No Mach-O rewriting,
+stripping, re-signing, or Linux sandbox flags are applied on macOS. The writable
+Home Manager copy may self-update; the next activation restores the Nix pin.
+Privacy grants stay tied to upstream's signing identity, not the Nix store path.
+
 ## What you get
+
+On macOS: `Applications/Grok Bot.app`, plus `bin/grok-bot` and `bin/sand`
+symlinks to its upstream executable. Prefer launching the installed app bundle.
+
+On Linux:
 
 - `grok-bot` — the app, wrapped for NixOS (patchelf'd, GApps-wrapped,
   Wayland-aware).
@@ -89,7 +116,7 @@ Wayland is opt-in through the usual NixOS variable: with `NIXOS_OZONE_WL=1`
 set (and a Wayland session), the wrapper adds `--ozone-platform-hint=auto` and
 Wayland window decorations. Otherwise it runs under XWayland/X11.
 
-## Getting sand:// links to work
+## Getting sand:// links to work (Linux)
 
 Login redirects open `sand://...` URLs. For your desktop environment to route
 those to Grok Bot, two things must hold:
@@ -115,7 +142,7 @@ Empty output means the desktop file isn't visible (see 1). The desktop *id*
 stays `grok-bot.desktop` across rebuilds even though the store path in `Exec=`
 changes, so the association survives upgrades.
 
-## Packaging notes
+## Packaging notes (Linux)
 
 Upstream ships its own Electron 42 build, and the bundled native modules
 (`better-sqlite3`, `tree-sitter`, and others) are compiled against it. This
@@ -165,7 +192,11 @@ Reads the current stable version from upstream's Linux update feed and
 rewrites the download namespace, `version`, `buildId`, `.deb` filename, and
 `hash` in `package.nix`. It also checks that the downloaded artifact is the
 expected `sand`/`grok-bot` amd64 package and that its embedded version
-matches the feed before changing anything.
+matches the feed before changing anything. It also fetches the exact same
+version's official macOS arm64 ZIP, checks its embedded app identity and
+version, and updates `package-darwin.nix` with that version and a separate
+SHA256. Both downloads must validate before either pin changes; if platforms
+roll out at different times, the updater fails safely and can be retried.
 
 The Linux feed advertises an AppImage zsync URL, not the `.deb`. The download
 namespace and build id are shared across Linux artifacts, so the script
@@ -176,7 +207,8 @@ package. This package still does not self-update — re-run `./update.sh` and
 rebuild instead.
 
 A daily GitHub Actions workflow runs the updater, refreshes `flake.lock`, builds
-the package, and commits verified changes to `main`. The workflow can also be
+the Linux package, and commits verified changes to `main`. The check workflow
+builds both platforms and verifies the macOS signature and stapled ticket. The workflow can also be
 run manually from the Actions tab.
 
 To pin an exact build, pass its URL:

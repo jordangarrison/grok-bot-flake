@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Bump package.nix to the current stable Grok Bot release.
+# Bump both platform packages to the same stable Grok Bot release.
 #
 # The Linux update feed advertises an AppImage zsync URL, not the .deb, but
 # the download namespace and build id are shared across Linux artifacts. Read
@@ -25,6 +25,7 @@ if [[ "${GROK_BOT_UPDATE_ENV:-}" != 1 ]]; then
     nixpkgs#gnused \
     nixpkgs#nix \
     nixpkgs#dpkg \
+    nixpkgs#python3 \
     --command env GROK_BOT_UPDATE_ENV=1 bash ./update.sh "$@"
 fi
 
@@ -194,11 +195,36 @@ if [ "$package_architecture" != "amd64" ]; then
   exit 1
 fi
 
+# The macOS feed uses a versioned URL rather than Linux's build id. Fetch
+# that exact version, including when an explicit historical .deb URL is given.
+# Validate both artifacts before changing either platform's pin.
+darwin_url="https://downloads.cursor.com/grokbot/stable/darwin-arm64/${version}/Grok_Bot_${version}.zip"
+darwin_prefetch="$(nix store prefetch-file --json --hash-type sha256 "$darwin_url")"
+darwin_hash="$(jq -er '.hash' <<<"$darwin_prefetch")"
+darwin_path="$(jq -er '.storePath' <<<"$darwin_prefetch")"
+python3 - "$darwin_path" "$version" <<'PYTHON'
+import plistlib, sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    info = plistlib.loads(archive.read("Grok Bot.app/Contents/Info.plist"))
+if info.get("CFBundleShortVersionString") != sys.argv[2]:
+    sys.exit("error: macOS version does not match Linux release " + sys.argv[2])
+if info.get("CFBundleIdentifier") != "com.anysphere.sand" or info.get("CFBundleExecutable") != "Grok Bot":
+    sys.exit("error: unexpected macOS application identity")
+PYTHON
+current_darwin_version="$(sed -n 's/^  version = "\(.*\)";$/\1/p' package-darwin.nix)"
+current_darwin_hash="$(sed -n 's/^    hash = "\(.*\)";$/\1/p' package-darwin.nix)"
+if [ -z "$current_darwin_version" ] || [ -z "$current_darwin_hash" ]; then
+  echo "error: could not read release metadata from package-darwin.nix" >&2
+  exit 1
+fi
+
 if [ "$download_base" = "$current_download_base" ] \
   && [ "$version" = "$current_version" ] \
   && [ "$build_id" = "$current_build_id" ] \
   && [ "$deb_file_nix" = "$current_deb_file" ] \
-  && [ "$hash" = "$current_hash" ]; then
+  && [ "$hash" = "$current_hash" ] \
+  && [ "$version" = "$current_darwin_version" ] \
+  && [ "$darwin_hash" = "$current_darwin_hash" ]; then
   echo "already at $version ($build_id)"
   exit 0
 fi
@@ -228,4 +254,9 @@ if [ "$updated_download_base" != "$download_base" ] \
   exit 1
 fi
 
-echo "package.nix updated to $version"
+sed -i \
+  -e "s|^  version = \".*\";$|  version = \"${version}\";|" \
+  -e "s|^    hash = \".*\";$|    hash = \"${darwin_hash}\";|" \
+  package-darwin.nix
+
+echo "package.nix and package-darwin.nix updated to $version"

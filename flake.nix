@@ -6,8 +6,11 @@
   outputs =
     { self, nixpkgs }:
     let
-      # Upstream ships an amd64 .deb only.
-      systems = [ "x86_64-linux" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-darwin"
+      ];
+      packageFor = system: if system == "aarch64-darwin" then ./package-darwin.nix else ./package.nix;
 
       # Grok Bot is proprietary, and this flake exists only to package it, so
       # allow unfree here rather than making every consumer opt in. The overlay
@@ -27,15 +30,15 @@
     in
     {
       packages = forAllSystems (
-        { pkgs, ... }:
+        { pkgs, system }:
         rec {
-          grok-bot = pkgs.callPackage ./package.nix { };
+          grok-bot = pkgs.callPackage (packageFor system) { };
           default = grok-bot;
         }
       );
 
       overlays.default = final: _prev: {
-        grok-bot = final.callPackage ./package.nix { };
+        grok-bot = final.callPackage (packageFor final.stdenv.hostPlatform.system) { };
       };
 
       apps = forAllSystems (
