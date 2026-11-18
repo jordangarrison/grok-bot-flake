@@ -64,14 +64,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          if git diff --quiet -- package.nix; then
+          if git diff --quiet -- package.nix package-darwin.nix; then
             message="chore: update flake inputs"
           else
             version=$(sed -n 's/^  version = "\(.*\)";$/\1/p' package.nix)
             message="chore: update grok-bot to $version"
           fi
 
-          git add package.nix flake.lock
+          git add package.nix package-darwin.nix flake.lock
           git commit -m "$message"
 
           # A developer may have pushed while the package was building. Rebase

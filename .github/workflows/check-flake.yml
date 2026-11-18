@@ -11,8 +11,16 @@ permissions:
 
 jobs:
   build:
-    name: Build (x86_64-linux)
-    runs-on: ubuntu-24.04
+    name: Build (${{ matrix.system }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-darwin
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
 
     steps:
@@ -29,10 +37,17 @@ jobs:
             nixpkgs#jq \
             nixpkgs#coreutils \
             nixpkgs#gnused \
+            nixpkgs#python3 \
             --command ./tests/update-feed-fallback.sh
 
       - name: Evaluate flake
         run: nix flake check --no-build --show-trace
 
       - name: Build package
-        run: nix build .#packages.x86_64-linux.default --print-build-logs
+        run: nix build .#packages.${{ matrix.system }}.default --print-build-logs
+
+      - name: Verify upstream macOS signature and notarization ticket
+        if: matrix.system == 'aarch64-darwin'
+        run: |
+          codesign --verify --deep --strict "result/Applications/Grok Bot.app"
+          xcrun stapler validate "result/Applications/Grok Bot.app"
